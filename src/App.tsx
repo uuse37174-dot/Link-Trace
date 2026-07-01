@@ -78,12 +78,17 @@ export default function App() {
     if (!silent) setIsFetching(true);
     try {
       const res = await fetch("/api/links");
-      if (!res.ok) throw new Error("Failed to load links");
+      if (!res.ok) {
+        if (!silent) throw new Error("Failed to load links");
+        return; // ignore silent failures to avoid screen flickering
+      }
       const data: TrackedLink[] = await res.json();
       setLinks(data);
       setErrorMsg(null);
     } catch (err: any) {
-      setErrorMsg(err.message || "Could not retrieve tracked links");
+      if (!silent) {
+        setErrorMsg(err.message || "Could not retrieve tracked links");
+      }
     } finally {
       if (!silent) setIsFetching(false);
     }
