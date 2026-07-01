@@ -55,6 +55,152 @@ export default function App() {
   const [isFetching, setIsFetching] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [isServerSupported, setIsServerSupported] = useState<boolean | null>(null);
+
+  // Local storage helper functions
+  const loadLocalLinks = (): TrackedLink[] => {
+    try {
+      const saved = localStorage.getItem("clicktracker_links");
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      console.error("Failed to load local links", e);
+      return [];
+    }
+  };
+
+  const saveLocalLinks = (updated: TrackedLink[]) => {
+    try {
+      localStorage.setItem("clicktracker_links", JSON.stringify(updated));
+    } catch (e) {
+      console.error("Failed to save local links", e);
+    }
+  };
+
+  // Client-side interceptor for /t/:id or /track/:id redirects
+  useEffect(() => {
+    const path = window.location.pathname;
+    const match = path.match(/^\/(?:t|track)\/([a-zA-Z0-9_-]+)/);
+    if (!match) return;
+
+    const linkId = match[1];
+
+    // Read local links to see if we can redirect immediately
+    let foundLink: TrackedLink | null = null;
+    try {
+      const saved = localStorage.getItem("clicktracker_links");
+      if (saved) {
+        const savedLinks: TrackedLink[] = JSON.parse(saved);
+        foundLink = savedLinks.find(l => l.id === linkId) || null;
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
+    if (foundLink) {
+      performRedirect(foundLink);
+    } else {
+      // Fetch from API in case it exists on the backend server
+      fetch("/api/links")
+        .then(res => {
+          if (res.ok) return res.json();
+          throw new Error();
+        })
+        .then((serverLinks: TrackedLink[]) => {
+          const fl = serverLinks.find(l => l.id === linkId);
+          if (fl) {
+            performRedirect(fl);
+          } else {
+            alert("Tracking link not found or has been deleted.");
+            window.location.replace("/");
+          }
+        })
+        .catch(() => {
+          alert("Tracking link not found or has been deleted.");
+          window.location.replace("/");
+        });
+    }
+
+    function performRedirect(link: TrackedLink) {
+      // Record click locally
+      try {
+        const saved = localStorage.getItem("clicktracker_links");
+        let savedLinks: TrackedLink[] = saved ? JSON.parse(saved) : [];
+        const linkIndex = savedLinks.findIndex(l => l.id === link.id);
+        
+        const clickId = "clk_cli_" + Math.random().toString(36).substring(2, 9);
+        const ua = navigator.userAgent;
+        let browser = "Browser";
+        let os = "OS";
+        let device: "Mobile" | "Tablet" | "Desktop" = "Desktop";
+
+        if (ua.includes("Windows")) os = "Windows";
+        else if (ua.includes("Macintosh") || ua.includes("Mac OS")) os = "macOS";
+        else if (ua.includes("iPhone")) { os = "iOS"; device = "Mobile"; }
+        else if (ua.includes("iPad")) { os = "iPadOS"; device = "Tablet"; }
+        else if (ua.includes("Android")) { os = "Android"; device = ua.includes("Mobile") ? "Mobile" : "Tablet"; }
+        else if (ua.includes("Linux")) os = "Linux";
+
+        if (ua.includes("Firefox")) browser = "Firefox";
+        else if (ua.includes("Edg")) browser = "Edge";
+        else if (ua.includes("Chrome")) browser = "Chrome";
+        else if (ua.includes("Safari") && !ua.includes("Chrome")) browser = "Safari";
+
+        const queryParams: Record<string, string> = {};
+        const searchParams = new URLSearchParams(window.location.search);
+        for (const [key, val] of searchParams.entries()) {
+          queryParams[key] = val;
+        }
+
+        const newClick: ClickLog = {
+          id: clickId,
+          timestamp: new Date().toISOString(),
+          userAgent: ua,
+          ip: "Client-Side Redirect Tracker",
+          referrer: document.referrer || "Direct Link",
+          browser,
+          os,
+          device,
+          queryParams
+        };
+
+        if (linkIndex !== -1) {
+          savedLinks[linkIndex].clicks.push(newClick);
+          localStorage.setItem("clicktracker_links", JSON.stringify(savedLinks));
+        } else {
+          const updatedLink = { ...link, clicks: [...link.clicks, newClick] };
+          savedLinks.unshift(updatedLink);
+          localStorage.setItem("clicktracker_links", JSON.stringify(savedLinks));
+        }
+      } catch (e) {
+        console.error(e);
+      }
+
+      // Add original URL parameters and merge with custom query params
+      let target = link.targetUrl;
+      const currentSearch = window.location.search;
+      if (currentSearch) {
+        try {
+          const urlObj = new URL(target);
+          const targetParams = new URLSearchParams(urlObj.search);
+          const currentParams = new URLSearchParams(currentSearch);
+          for (const [key, val] of currentParams.entries()) {
+            targetParams.set(key, val);
+          }
+          urlObj.search = targetParams.toString();
+          target = urlObj.toString();
+        } catch (e) {
+          if (target.includes("?")) {
+            target += currentSearch.replace("?", "&");
+          } else {
+            target += currentSearch;
+          }
+        }
+      }
+
+      window.location.replace(target);
+    }
+  }, []);
+
   // Load backend configuration
   useEffect(() => {
     fetch("/api/config")
@@ -85,11 +231,18 @@ export default function App() {
       }
       const data: TrackedLink[] = await res.json();
       setLinks(data);
+      setIsServerSupported(true);
       setErrorMsg(null);
+
+      // Sync local storage as backup
+      try {
+        localStorage.setItem("clicktracker_links", JSON.stringify(data));
+      } catch (e) {}
     } catch (err: any) {
-      if (!silent) {
-        setErrorMsg(err.message || "Could not retrieve tracked links");
-      }
+      console.warn("API request failed, falling back to localStorage", err);
+      setIsServerSupported(false);
+      const localLinks = loadLocalLinks();
+      setLinks(localLinks);
     } finally {
       if (!silent) setIsFetching(false);
     }
@@ -116,13 +269,48 @@ export default function App() {
     setIsCreating(true);
     setErrorMsg(null);
 
+    let formattedUrl = targetUrl.trim();
+    if (!/^https?:\/\//i.test(formattedUrl)) {
+      formattedUrl = `https://${formattedUrl}`;
+    }
+
+    try {
+      new URL(formattedUrl);
+    } catch (err) {
+      setErrorMsg("Invalid destination URL format");
+      setIsCreating(false);
+      return;
+    }
+
+    const titleText = title.trim() || `Link to ${new URL(formattedUrl).hostname}`;
+
+    if (isServerSupported === false) {
+      const newId = Math.random().toString(36).substring(2, 8);
+      const newLink: TrackedLink = {
+        id: newId,
+        targetUrl: formattedUrl,
+        title: titleText,
+        createdAt: new Date().toISOString(),
+        clicks: [],
+      };
+
+      const updated = [newLink, ...links];
+      setLinks(updated);
+      saveLocalLinks(updated);
+      setSelectedLinkId(newId);
+      setTargetUrl("");
+      setTitle("");
+      setIsCreating(false);
+      return;
+    }
+
     try {
       const res = await fetch("/api/links", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          targetUrl,
-          title: title.trim() || undefined,
+          targetUrl: formattedUrl,
+          title: titleText,
         }),
       });
 
@@ -139,7 +327,23 @@ export default function App() {
       setTargetUrl("");
       setTitle("");
     } catch (err: any) {
-      setErrorMsg(err.message || "An error occurred while creating the link");
+      console.warn("Create API failed, saving client-side:", err);
+      const newId = Math.random().toString(36).substring(2, 8);
+      const newLink: TrackedLink = {
+        id: newId,
+        targetUrl: formattedUrl,
+        title: titleText,
+        createdAt: new Date().toISOString(),
+        clicks: [],
+      };
+
+      const updated = [newLink, ...links];
+      setLinks(updated);
+      saveLocalLinks(updated);
+      setSelectedLinkId(newId);
+      setTargetUrl("");
+      setTitle("");
+      setIsServerSupported(false);
     } finally {
       setIsCreating(false);
     }
@@ -149,6 +353,16 @@ export default function App() {
   const handleDeleteLink = async (id: string, e?: MouseEvent) => {
     if (e) e.stopPropagation();
     if (!confirm("Are you sure you want to delete this tracked link and all its click logs?")) {
+      return;
+    }
+
+    if (isServerSupported === false) {
+      const updated = links.filter(l => l.id !== id);
+      setLinks(updated);
+      saveLocalLinks(updated);
+      if (selectedLinkId === id) {
+        setSelectedLinkId(null);
+      }
       return;
     }
 
@@ -164,7 +378,14 @@ export default function App() {
         setSelectedLinkId(null);
       }
     } catch (err: any) {
-      setErrorMsg(err.message || "Could not delete link");
+      console.warn("Delete API failed, removing client-side:", err);
+      const updated = links.filter(l => l.id !== id);
+      setLinks(updated);
+      saveLocalLinks(updated);
+      if (selectedLinkId === id) {
+        setSelectedLinkId(null);
+      }
+      setIsServerSupported(false);
     }
   };
 
