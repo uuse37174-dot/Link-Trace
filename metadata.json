@@ -1,0 +1,6 @@
+{
+  "name": "Link Click Tracker",
+  "description": "Create tracked links, copy and shorten them, and view real-time click logs with exact timestamps, user-agent details, and query parameters.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

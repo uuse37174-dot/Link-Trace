@@ -1,0 +1,17 @@
+{
+  "short_name": "ClickTracker",
+  "name": "Link Click Tracker",
+  "description": "Generate tracked redirect links and audit real-time clicks on-the-go",
+  "icons": [
+    {
+      "src": "/pwa-icon.jpg",
+      "type": "image/jpeg",
+      "sizes": "512x512"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#ffffff",
+  "theme_color": "#4f46e5",
+  "display": "standalone",
+  "orientation": "portrait-primary"
+}
