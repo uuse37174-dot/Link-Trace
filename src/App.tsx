@@ -218,8 +218,9 @@ export default function App() {
 
   // Compute the current absolute base tracking URL
   const baseTrackingUrl = useMemo(() => {
-    return appUrl || window.location.origin;
-  }, [appUrl]);
+    // Always use the current browser's origin so testing/copying links works natively in the current environment
+    return window.location.origin;
+  }, []);
 
   // Fetch tracked links from the server
   const fetchLinks = useCallback(async (silent = false) => {

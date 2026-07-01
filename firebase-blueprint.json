@@ -1,0 +1,23 @@
+{
+  "entities": {
+    "Link": {
+      "title": "TrackedLink",
+      "description": "A tracked redirect link",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "targetUrl": { "type": "string" },
+        "title": { "type": "string" },
+        "createdAt": { "type": "string" },
+        "clicks": { "type": "array" }
+      },
+      "required": ["id", "targetUrl", "title", "createdAt", "clicks"]
+    }
+  },
+  "firestore": {
+    "/links/{linkId}": {
+      "schema": "Link",
+      "description": "Collection of shortened or tracked redirect links and their logs"
+    }
+  }
+}
