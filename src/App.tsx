@@ -55,77 +55,20 @@ export default function App() {
   const [isFetching, setIsFetching] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [isSimulationMode, setIsSimulationMode] = useState(false);
-
-  // Load simulated links from localStorage or use elegant initial samples
-  const loadSimulatedLinks = useCallback(() => {
-    try {
-      const saved = localStorage.getItem("clicktracker_simulated_links");
-      if (saved) {
-        setLinks(JSON.parse(saved));
-      } else {
-        const initialSamples: TrackedLink[] = [
-          {
-            id: "sim99a",
-            targetUrl: "https://www.google.com",
-            title: "Google Search Campaign Demo",
-            createdAt: new Date(Date.now() - 3600000 * 24).toISOString(),
-            clicks: [
-              {
-                id: "c_sim1",
-                timestamp: new Date(Date.now() - 3600000 * 5).toISOString(),
-                userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1",
-                ip: "103.45.12.98",
-                referrer: "https://t.co/",
-                browser: "Safari",
-                os: "iOS",
-                device: "Mobile",
-                queryParams: { utm_source: "twitter", utm_medium: "social" }
-              },
-              {
-                id: "c_sim2",
-                timestamp: new Date(Date.now() - 3600000 * 2).toISOString(),
-                userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36",
-                ip: "212.95.8.44",
-                referrer: "https://www.linkedin.com/",
-                browser: "Chrome",
-                os: "Windows",
-                device: "Desktop",
-                queryParams: { utm_source: "linkedin", utm_medium: "profile" }
-              }
-            ]
-          }
-        ];
-        setLinks(initialSamples);
-        localStorage.setItem("clicktracker_simulated_links", JSON.stringify(initialSamples));
-      }
-    } catch (e) {
-      console.error("Failed to load simulated links", e);
-    }
-  }, []);
-
   // Load backend configuration
   useEffect(() => {
     fetch("/api/config")
-      .then(async (res) => {
-        const contentType = res.headers.get("content-type");
-        if (!res.ok || (contentType && contentType.includes("text/html"))) {
-          throw new Error("STATIONARY_DEPLOYMENT_DETECTION");
-        }
+      .then(res => {
+        if (!res.ok) throw new Error("Failed to load server configuration");
         return res.json();
       })
       .then(data => {
         if (data.appUrl) {
           setAppUrl(data.appUrl);
         }
-        setIsSimulationMode(false);
       })
-      .catch(err => {
-        console.warn("Could not fetch server config, falling back to local simulation mode:", err);
-        setIsSimulationMode(true);
-        loadSimulatedLinks();
-      });
-  }, [loadSimulatedLinks]);
+      .catch(err => console.error("Could not fetch server config", err));
+  }, []);
 
   // Compute the current absolute base tracking URL
   const baseTrackingUrl = useMemo(() => {
@@ -134,51 +77,23 @@ export default function App() {
 
   // Fetch tracked links from the server
   const fetchLinks = useCallback(async (silent = false) => {
-    if (isSimulationMode) {
-      try {
-        const saved = localStorage.getItem("clicktracker_simulated_links");
-        if (saved) {
-          setLinks(JSON.parse(saved));
-        }
-      } catch (err) {
-        console.error("Failed to read simulated links", err);
-      }
-      setIsFetching(false);
-      return;
-    }
-
     if (!silent) setIsFetching(true);
     try {
       const res = await fetch("/api/links");
-      const contentType = res.headers.get("content-type");
-      
-      if (!res.ok || (contentType && contentType.includes("text/html"))) {
-        throw new Error("STATIONARY_DEPLOYMENT_DETECTION");
+      if (!res.ok) {
+        throw new Error("Failed to retrieve tracked links from server");
       }
-
       const data: TrackedLink[] = await res.json();
       setLinks(data);
       setErrorMsg(null);
-      setIsSimulationMode(false);
     } catch (err: any) {
-      if (
-        err.message === "STATIONARY_DEPLOYMENT_DETECTION" ||
-        err.message?.includes("Unexpected token") ||
-        err.message?.includes("is not valid JSON") ||
-        err.message?.includes("JSON.parse")
-      ) {
-        console.warn("Stationary deployment or HTML response detected, switching to Simulation Mode.");
-        setIsSimulationMode(true);
-        loadSimulatedLinks();
-      } else {
-        if (!silent) {
-          setErrorMsg(err.message || "Could not retrieve tracked links");
-        }
+      if (!silent) {
+        setErrorMsg(err.message || "Could not retrieve tracked links");
       }
     } finally {
       if (!silent) setIsFetching(false);
     }
-  }, [isSimulationMode, loadSimulatedLinks]);
+  }, []);
 
   // Poll for clicks/updates periodically
   useEffect(() => {
@@ -201,38 +116,6 @@ export default function App() {
     setIsCreating(true);
     setErrorMsg(null);
 
-    if (isSimulationMode) {
-      let formattedUrl = targetUrl.trim();
-      if (!/^https?:\/\//i.test(formattedUrl)) {
-        formattedUrl = `https://${formattedUrl}`;
-      }
-      try {
-        new URL(formattedUrl);
-      } catch (err) {
-        setErrorMsg("Invalid target URL format");
-        setIsCreating(false);
-        return;
-      }
-
-      const newId = Math.random().toString(36).substring(2, 8);
-      const newLink: TrackedLink = {
-        id: newId,
-        targetUrl: formattedUrl,
-        title: title.trim() || `Link to ${new URL(formattedUrl).hostname}`,
-        createdAt: new Date().toISOString(),
-        clicks: [],
-      };
-
-      const updated = [newLink, ...links];
-      setLinks(updated);
-      localStorage.setItem("clicktracker_simulated_links", JSON.stringify(updated));
-      setSelectedLinkId(newId);
-      setTargetUrl("");
-      setTitle("");
-      setIsCreating(false);
-      return;
-    }
-
     try {
       const res = await fetch("/api/links", {
         method: "POST",
@@ -243,9 +126,9 @@ export default function App() {
         }),
       });
 
-      const contentType = res.headers.get("content-type");
-      if (!res.ok || (contentType && contentType.includes("text/html"))) {
-        throw new Error("STATIONARY_DEPLOYMENT_DETECTION");
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || "Failed to generate link");
       }
 
       const newLink: TrackedLink = await res.json();
@@ -256,18 +139,7 @@ export default function App() {
       setTargetUrl("");
       setTitle("");
     } catch (err: any) {
-      if (
-        err.message === "STATIONARY_DEPLOYMENT_DETECTION" ||
-        err.message?.includes("Unexpected token") ||
-        err.message?.includes("is not valid JSON") ||
-        err.message?.includes("JSON.parse")
-      ) {
-        console.warn("Stationary deployment or HTML response detected during creation, switching to Simulation Mode.");
-        setIsSimulationMode(true);
-        loadSimulatedLinks();
-      } else {
-        setErrorMsg(err.message || "An error occurred while creating the link");
-      }
+      setErrorMsg(err.message || "An error occurred while creating the link");
     } finally {
       setIsCreating(false);
     }
@@ -277,16 +149,6 @@ export default function App() {
   const handleDeleteLink = async (id: string, e?: MouseEvent) => {
     if (e) e.stopPropagation();
     if (!confirm("Are you sure you want to delete this tracked link and all its click logs?")) {
-      return;
-    }
-
-    if (isSimulationMode) {
-      const updated = links.filter(l => l.id !== id);
-      setLinks(updated);
-      localStorage.setItem("clicktracker_simulated_links", JSON.stringify(updated));
-      if (selectedLinkId === id) {
-        setSelectedLinkId(null);
-      }
       return;
     }
 
@@ -304,47 +166,6 @@ export default function App() {
     } catch (err: any) {
       setErrorMsg(err.message || "Could not delete link");
     }
-  };
-
-  // Simulate a click for testing inside browser simulation mode
-  const handleSimulateClick = (linkId: string) => {
-    const linkIndex = links.findIndex(l => l.id === linkId);
-    if (linkIndex === -1) return;
-
-    const browsers = ["Chrome", "Safari", "Firefox", "Edge"];
-    const osList = ["iOS", "Android", "macOS", "Windows", "Linux"];
-    const devices: ("Mobile" | "Tablet" | "Desktop")[] = ["Mobile", "Tablet", "Desktop"];
-    const referrers = ["https://t.co/", "https://www.linkedin.com/", "https://github.com/", "Direct Link Access"];
-
-    const randomBrowser = browsers[Math.floor(Math.random() * browsers.length)];
-    const randomOS = osList[Math.floor(Math.random() * osList.length)];
-    const randomDevice = randomOS === "iOS" || randomOS === "Android" ? devices[Math.floor(Math.random() * 2)] : "Desktop";
-    const randomReferrer = referrers[Math.floor(Math.random() * referrers.length)];
-
-    const simulatedClick: ClickLog = {
-      id: "clk_sim_" + Math.random().toString(36).substring(2, 9),
-      timestamp: new Date().toISOString(),
-      userAgent: `Simulated Browser (${randomBrowser}; ${randomOS})`,
-      ip: `49.207.${Math.floor(Math.random() * 255)}.${Math.floor(Math.random() * 255)}`,
-      referrer: randomReferrer === "Direct Link Access" ? "" : randomReferrer,
-      browser: randomBrowser,
-      os: randomOS,
-      device: randomDevice,
-      queryParams: { utm_source: "test_simulator", utm_medium: "local_click" }
-    };
-
-    const updatedLinks = [...links];
-    updatedLinks[linkIndex] = {
-      ...updatedLinks[linkIndex],
-      clicks: [...updatedLinks[linkIndex].clicks, simulatedClick]
-    };
-
-    setLinks(updatedLinks);
-    localStorage.setItem("clicktracker_simulated_links", JSON.stringify(updatedLinks));
-
-    // Open target link in new window safely
-    const target = updatedLinks[linkIndex].targetUrl;
-    window.open(target, "_blank", "noopener,noreferrer");
   };
 
   // Clipboard copy helper
@@ -447,35 +268,6 @@ export default function App() {
           </div>
         </div>
       </header>
-
-      {isSimulationMode && (
-        <div className="bg-amber-50 border-b border-amber-200 py-3 px-4 sm:px-6">
-          <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-3 text-xs text-amber-800">
-            <div className="flex items-start md:items-center gap-2.5">
-              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5 md:mt-0" />
-              <div>
-                <p className="font-semibold text-amber-900 flex items-center gap-1.5">
-                  Simulation Mode Active (Static Host Detected)
-                </p>
-                <p className="text-amber-700/95 mt-0.5 md:mt-0">
-                  This Link Tracker is operational in a secure browser sandbox. Real tracking and automatic redirection require a Node.js Express server backend.
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2.5 shrink-0 self-end md:self-auto">
-              <span className="text-[11px] font-medium bg-amber-100 text-amber-800 px-2 py-0.5 rounded-md">
-                100% Client-Side Sandbox
-              </span>
-              <button 
-                onClick={() => setIsSimulationMode(false)}
-                className="px-2 py-1 text-amber-900 hover:bg-amber-200/60 rounded transition-colors text-[11px] font-bold cursor-pointer"
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Main Workspace */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -773,27 +565,16 @@ export default function App() {
                           </div>
                           
                           <div className="flex items-center gap-1.5">
-                            {isSimulationMode ? (
-                              <button
-                                onClick={() => handleSimulateClick(selectedLink.id)}
-                                className="px-3 py-1.5 rounded-md text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white flex items-center justify-center gap-1.5 transition-all cursor-pointer"
-                                id="btn-test-redirect-link"
-                              >
-                                <ExternalLink className="w-3.5 h-3.5" />
-                                Test & Simulate
-                              </button>
-                            ) : (
-                              <a
-                                href={`${baseTrackingUrl}/t/${selectedLink.id}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="px-3 py-1.5 rounded-md text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white flex items-center justify-center gap-1.5 transition-all"
-                                id="btn-test-redirect-link"
-                              >
-                                <ExternalLink className="w-3.5 h-3.5" />
-                                Test Link
-                              </a>
-                            )}
+                            <a
+                              href={`${baseTrackingUrl}/t/${selectedLink.id}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="px-3 py-1.5 rounded-md text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white flex items-center justify-center gap-1.5 transition-all"
+                              id="btn-test-redirect-link"
+                            >
+                              <ExternalLink className="w-3.5 h-3.5" />
+                              Test Link
+                            </a>
 
                             <button
                               onClick={() => handleCopy(selectedLink.id)}
